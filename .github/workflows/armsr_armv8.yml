@@ -153,8 +153,15 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
         bash "$GITHUB_WORKSPACE/armsr/armv8/diy/add_n1_packages.sh"
+        mkdir -p clone
+        git clone --depth=1 https://github.com/ophub/luci-app-amlogic.git clone/amlogic
+        rm -rf package/luci-app-amlogic
+        cp -rf clone/amlogic/luci-app-amlogic package/luci-app-amlogic
+        rm -rf clone
 
         cat >> .config <<'EOF'
+        CONFIG_PACKAGE_luci-app-amlogic=y
+        CONFIG_PACKAGE_luci-i18n-amlogic-zh-cn=y
         CONFIG_PACKAGE_luci-app-homeproxy=y
         CONFIG_PACKAGE_luci-i18n-homeproxy-zh-cn=y
         CONFIG_PACKAGE_luci-app-mosdns=y
@@ -167,12 +174,13 @@ jobs:
         make defconfig
         make -j"$(nproc)" \
           package/homeproxy/compile \
+          package/luci-app-amlogic/compile \
           package/mosdns/mosdns/compile \
           package/mosdns/geo2txt/compile \
           package/mosdns/luci-app-mosdns/compile \
           package/v2ray-geodata/compile
 
-        for PACKAGE in luci-app-homeproxy luci-i18n-homeproxy-zh-cn luci-app-mosdns luci-i18n-mosdns-zh-cn mosdns v2ray-geoip v2ray-geosite geo2txt; do
+        for PACKAGE in luci-i18n-amlogic-zh-cn luci-app-homeproxy luci-i18n-homeproxy-zh-cn luci-app-mosdns luci-i18n-mosdns-zh-cn mosdns v2ray-geoip v2ray-geosite geo2txt; do
           PACKAGE_COUNT=0
           while IFS= read -r -d '' PACKAGE_FILE; do
             cp "$PACKAGE_FILE" "$GITHUB_WORKSPACE/imagebuilder/packages/"
@@ -191,7 +199,7 @@ jobs:
         sed -i "s|https://github.com/nantayo/N1-OpenWrt|https://github.com/${{ github.repository }}|g" files/etc/config/amlogic
         
         echo "Building image..."
-        PACKAGES="luci-app-amlogic luci-app-homeproxy luci-i18n-homeproxy-zh-cn luci-app-mosdns luci-i18n-mosdns-zh-cn autocore fstrim zoneinfo-asia bsdtar btrfs-progs chattr f2fs-tools gawk getopt lsattr perlbase-file perlbase-getopt perlbase-unicode perl-http-date pigz tar xfs-fsck xfs-mkfs -ppp -ppp-mod-pppoe -kmod-ppp -luci-app-attendedsysupgrade kmod-tun kmod-inet-diag kmod-netlink-diag kmod-nft-tproxy"
+        PACKAGES="luci-app-amlogic luci-i18n-amlogic-zh-cn luci-app-homeproxy luci-i18n-homeproxy-zh-cn luci-app-mosdns luci-i18n-mosdns-zh-cn luci-i18n-package-manager-zh-cn luci-i18n-base-zh-cn luci-i18n-firewall-zh-cn autocore fstrim zoneinfo-asia bsdtar btrfs-progs chattr f2fs-tools gawk getopt lsattr perlbase-file perlbase-getopt perlbase-unicode perl-http-date pigz tar xfs-fsck xfs-mkfs -ppp -ppp-mod-pppoe -kmod-ppp -luci-app-attendedsysupgrade kmod-tun kmod-inet-diag kmod-netlink-diag kmod-nft-tproxy"
         make image PROFILE="generic" PACKAGES="$PACKAGES" FILES="files"
         
         echo "Moving output to expected workspace..."

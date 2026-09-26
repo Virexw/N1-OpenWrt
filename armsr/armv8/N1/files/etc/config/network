@@ -9,6 +9,7 @@ config interface 'lan'
 	option device 'eth0'
 	option ipaddr '192.168.0.240/24'
 	option gateway '192.168.0.1'
+	list dns '192.168.0.1'
 	option multipath 'off'
 	option delegate '0'
 
