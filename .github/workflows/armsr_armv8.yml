@@ -128,14 +128,15 @@ jobs:
         if [[ "$VERSION_NUM" == 25.* ]]; then
           # APK mode (ImmortalWrt 25.12 and newer)
           AMLOGIC_URL=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/ophub/luci-app-amlogic/releases/latest | grep "browser_download_url" | grep "luci-app-amlogic" | grep -v "i18n" | grep "\.apk" | head -n 1 | cut -d '"' -f 4)
-          if [ -n "$AMLOGIC_URL" ]; then curl -L -o packages/luci-app-amlogic.apk "$AMLOGIC_URL"; else echo "Error: AMLOGIC_URL is empty!"; exit 1; fi
-
         else
           # IPK mode (ImmortalWrt 24.10)
           AMLOGIC_URL=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/ophub/luci-app-amlogic/releases/latest | grep "browser_download_url" | grep "luci-app-amlogic_" | grep -v "i18n" | grep "\.ipk" | head -n 1 | cut -d '"' -f 4)
-          if [ -n "$AMLOGIC_URL" ]; then curl -L -o packages/luci-app-amlogic.ipk "$AMLOGIC_URL"; else echo "Error: AMLOGIC_URL is empty!"; exit 1; fi
-
         fi
+
+        if [ -z "$AMLOGIC_URL" ]; then echo "Error: AMLOGIC_URL is empty!"; exit 1; fi
+        AMLOGIC_FILE="${AMLOGIC_URL##*/}"
+        AMLOGIC_FILE="${AMLOGIC_FILE%%\?*}"
+        curl -fL -o "packages/$AMLOGIC_FILE" "$AMLOGIC_URL"
         
         echo "Building current HomeProxy and MosDNS packages with the matching SDK..."
         SDK_INDEX_URL="https://downloads.immortalwrt.org/releases/$VERSION_NUM/targets/armsr/armv8/"
