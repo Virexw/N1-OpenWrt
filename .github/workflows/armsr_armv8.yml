@@ -14,11 +14,13 @@ on:
       branch:
         description: 'ImmortalWrt Branch or Tag'
         required: true
-        default: 'v24.10.6'
+        default: 'v25.12.2'
         type: choice
         options:
           - v24.10.6
           - v25.12.0
+          - v25.12.1
+          - v25.12.2
       kernel:
         description: 'Amlogic Kernel Version'
         required: true
@@ -40,7 +42,7 @@ on:
 env:
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   REPO_URL: https://github.com/immortalwrt/immortalwrt
-  REPO_BRANCH: ${{ github.event.inputs.branch || 'v24.10.6' }}
+  REPO_BRANCH: ${{ github.event.inputs.branch || 'v25.12.2' }}
   TZ: Asia/Shanghai
 
 jobs:
@@ -76,10 +78,40 @@ jobs:
         sudo mkdir -p /workdir
         sudo chown $USER:$GROUPS /workdir
 
+    - name: Prepare first-boot root password
+      env:
+        N1_ROOT_PASSWORD: ${{ secrets.N1_ROOT_PASSWORD }}
+      run: |
+        if [[ -z "$N1_ROOT_PASSWORD" ]]; then
+          echo "Set the N1_ROOT_PASSWORD Actions secret before building."
+          exit 1
+        fi
+
+        ROOT_PASSWORD_HASH=$(printf '%s\n' "$N1_ROOT_PASSWORD" | openssl passwd -6 -stdin)
+        if [[ -z "$ROOT_PASSWORD_HASH" ]]; then
+          echo "Failed to hash N1_ROOT_PASSWORD."
+          exit 1
+        fi
+
+        mkdir -p armsr/armv8/N1/files/etc/uci-defaults
+        printf '%s\n' "$ROOT_PASSWORD_HASH" > armsr/armv8/N1/files/etc/n1-root-password.hash
+        chmod 600 armsr/armv8/N1/files/etc/n1-root-password.hash
+        cat > armsr/armv8/N1/files/etc/uci-defaults/zzzz-n1-root-password <<'EOF'
+        #!/bin/sh
+        umask 077
+        hash="$(cat /etc/n1-root-password.hash 2>/dev/null)"
+        [ -n "$hash" ] || exit 1
+        awk -F: -v hash="$hash" 'BEGIN { OFS = FS } $1 == "root" { $2 = hash } { print }' /etc/shadow > /etc/shadow.tmp || exit 1
+        mv /etc/shadow.tmp /etc/shadow || exit 1
+        rm -f /etc/n1-root-password.hash
+        exit 0
+        EOF
+        chmod 700 armsr/armv8/N1/files/etc/uci-defaults/zzzz-n1-root-password
+
     - name: Use Image Builder to build rootfs
       if: github.event.inputs.build_mode != 'Compile'
       run: |
-        VERSION_NUM=$(echo "${{ github.event.inputs.branch || 'v24.10.6' }}" | sed 's/^v//')
+        VERSION_NUM=$(echo "${{ github.event.inputs.branch || 'v25.12.2' }}" | sed 's/^v//')
         IB_FILE="immortalwrt-imagebuilder-${VERSION_NUM}-armsr-armv8.Linux-x86_64.tar.zst"
         IB_URL="https://downloads.immortalwrt.org/releases/${VERSION_NUM}/targets/armsr/armv8/${IB_FILE}"
         
@@ -93,8 +125,8 @@ jobs:
         mkdir -p packages files
         
         echo "Downloading custom packages..."
-        if [[ "${{ github.event.inputs.branch || 'v24.10.6' }}" == "v25.12.0" ]]; then
-          # APK mode (ImmortalWrt 25.12)
+        if [[ "$VERSION_NUM" == 25.* ]]; then
+          # APK mode (ImmortalWrt 25.12 and newer)
           AMLOGIC_URL=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/ophub/luci-app-amlogic/releases/latest | grep "browser_download_url" | grep "luci-app-amlogic" | grep -v "i18n" | grep "\.apk" | head -n 1 | cut -d '"' -f 4)
           if [ -n "$AMLOGIC_URL" ]; then curl -L -o packages/luci-app-amlogic.apk "$AMLOGIC_URL"; else echo "Error: AMLOGIC_URL is empty!"; exit 1; fi
 
@@ -105,12 +137,60 @@ jobs:
 
         fi
         
+        echo "Building current HomeProxy and MosDNS packages with the matching SDK..."
+        SDK_INDEX_URL="https://downloads.immortalwrt.org/releases/$VERSION_NUM/targets/armsr/armv8/"
+        SDK_FILE=$(curl -fsSL "$SDK_INDEX_URL" | grep -oE 'immortalwrt-sdk-[^"]+Linux-x86_64\.tar\.zst' | grep "^immortalwrt-sdk-${VERSION_NUM}-armsr-armv8_" | head -n 1)
+        if [ -z "$SDK_FILE" ]; then echo "Error: matching ImmortalWrt SDK not found"; exit 1; fi
+
+        curl -fL "$SDK_INDEX_URL$SDK_FILE" -o "$GITHUB_WORKSPACE/$SDK_FILE"
+        tar -xf "$GITHUB_WORKSPACE/$SDK_FILE" -C "$GITHUB_WORKSPACE"
+        rm -f "$GITHUB_WORKSPACE/$SDK_FILE"
+        SDK_DIR=$(find "$GITHUB_WORKSPACE" -maxdepth 1 -type d -name "immortalwrt-sdk-${VERSION_NUM}-armsr-armv8_*" -print -quit)
+        if [ -z "$SDK_DIR" ]; then echo "Error: SDK extraction failed"; exit 1; fi
+
+        cd "$SDK_DIR"
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+        bash "$GITHUB_WORKSPACE/armsr/armv8/diy/add_n1_packages.sh"
+
+        cat >> .config <<'EOF'
+        CONFIG_PACKAGE_luci-app-homeproxy=y
+        CONFIG_PACKAGE_luci-i18n-homeproxy-zh-cn=y
+        CONFIG_PACKAGE_luci-app-mosdns=y
+        CONFIG_PACKAGE_luci-i18n-mosdns-zh-cn=y
+        CONFIG_PACKAGE_mosdns=y
+        CONFIG_PACKAGE_geo2txt=y
+        CONFIG_PACKAGE_v2ray-geoip=y
+        CONFIG_PACKAGE_v2ray-geosite=y
+        EOF
+        make defconfig
+        make -j"$(nproc)" \
+          package/homeproxy/compile \
+          package/mosdns/mosdns/compile \
+          package/mosdns/geo2txt/compile \
+          package/mosdns/luci-app-mosdns/compile \
+          package/v2ray-geodata/compile
+
+        for PACKAGE in luci-app-homeproxy luci-i18n-homeproxy-zh-cn luci-app-mosdns luci-i18n-mosdns-zh-cn mosdns v2ray-geoip v2ray-geosite geo2txt; do
+          PACKAGE_COUNT=0
+          while IFS= read -r -d '' PACKAGE_FILE; do
+            cp "$PACKAGE_FILE" "$GITHUB_WORKSPACE/imagebuilder/packages/"
+            PACKAGE_COUNT=$((PACKAGE_COUNT + 1))
+          done < <(find "$SDK_DIR/bin/packages" -type f \( -name "$PACKAGE*.ipk" -o -name "$PACKAGE*.apk" \) -print0)
+          if [ "$PACKAGE_COUNT" -eq 0 ]; then
+            echo "Error: package $PACKAGE was not built by the SDK"
+            exit 1
+          fi
+        done
+
+        cd "$GITHUB_WORKSPACE/imagebuilder"
+
         echo "Copying custom configuration files..."
         cp -r $GITHUB_WORKSPACE/armsr/armv8/N1/files/* files/
         sed -i "s|https://github.com/nantayo/N1-OpenWrt|https://github.com/${{ github.repository }}|g" files/etc/config/amlogic
         
         echo "Building image..."
-        PACKAGES="luci-app-amlogic autocore fstrim zoneinfo-asia bsdtar btrfs-progs chattr f2fs-tools gawk getopt lsattr perlbase-file perlbase-getopt perlbase-unicode perl-http-date pigz tar xfs-fsck xfs-mkfs -ppp -ppp-mod-pppoe -kmod-ppp -luci-app-attendedsysupgrade kmod-tun kmod-inet-diag kmod-netlink-diag kmod-nft-tproxy"
+        PACKAGES="luci-app-amlogic luci-app-homeproxy luci-i18n-homeproxy-zh-cn luci-app-mosdns luci-i18n-mosdns-zh-cn autocore fstrim zoneinfo-asia bsdtar btrfs-progs chattr f2fs-tools gawk getopt lsattr perlbase-file perlbase-getopt perlbase-unicode perl-http-date pigz tar xfs-fsck xfs-mkfs -ppp -ppp-mod-pppoe -kmod-ppp -luci-app-attendedsysupgrade kmod-tun kmod-inet-diag kmod-netlink-diag kmod-nft-tproxy"
         make image PROFILE="generic" PACKAGES="$PACKAGES" FILES="files"
         
         echo "Moving output to expected workspace..."
@@ -135,6 +215,12 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
+    - name: Add current HomeProxy and MosDNS sources
+      if: github.event.inputs.build_mode == 'Compile'
+      run: |
+        cd openwrt
+        bash "$GITHUB_WORKSPACE/armsr/armv8/diy/add_n1_packages.sh"
+
     - name: Load N1 custom config
       if: github.event.inputs.build_mode == 'Compile'
       run: |
@@ -158,6 +244,7 @@ jobs:
       if: github.event.inputs.build_mode == 'Compile'
       run: |
         chmod -R 755 openwrt
+        chmod 600 openwrt/files/etc/n1-root-password.hash
         cd openwrt
         echo -e "$(nproc) thread compile"
         make -j$(( $(nproc) + 1 )) || make -j1 V=s
@@ -182,7 +269,7 @@ jobs:
           * 基本信息
           IP: 192.168.0.240
           账户: root
-          密码: password
+          密码: 已通过 GitHub Actions secret N1_ROOT_PASSWORD 设置
 
     - name: Delete old releases
       uses: mgz0227/delete-older-releases@master

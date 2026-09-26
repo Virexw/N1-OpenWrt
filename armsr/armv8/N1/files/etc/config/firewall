@@ -1,0 +1,35 @@
+config defaults
+	option input 'ACCEPT'
+	option output 'ACCEPT'
+	option forward 'ACCEPT'
+	option drop_invalid '1'
+
+config zone
+	option name 'lan'
+	list network 'lan'
+	option input 'ACCEPT'
+	option output 'ACCEPT'
+	option forward 'ACCEPT'
+
+config nat
+	option name 'nat'
+	list proto 'all'
+	option src 'lan'
+	option target 'MASQUERADE'
+
+config include 'homeproxy_forward'
+	option type 'nftables'
+	option path '/var/run/homeproxy/fw4_forward.nft'
+	option position 'chain-pre'
+	option chain 'forward'
+
+config include 'homeproxy_input'
+	option type 'nftables'
+	option path '/var/run/homeproxy/fw4_input.nft'
+	option position 'chain-pre'
+	option chain 'input'
+
+config include 'homeproxy_post'
+	option type 'nftables'
+	option path '/var/run/homeproxy/fw4_post.nft'
+	option position 'table-post'
