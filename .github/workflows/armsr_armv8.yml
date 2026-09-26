@@ -17,7 +17,6 @@ on:
         default: 'v25.12.2'
         type: choice
         options:
-          - v24.10.6
           - v25.12.0
           - v25.12.1
           - v25.12.2
@@ -123,15 +122,12 @@ jobs:
         
         cd imagebuilder
         mkdir -p packages files
+
+        # Fetch the official package separately; install it after HomeProxy and its feed dependency are in the image.
+        bash "$GITHUB_WORKSPACE/armsr/armv8/diy/download_sing_box.sh" "$RUNNER_TEMP/sing-box"
         
         echo "Downloading custom packages..."
-        if [[ "$VERSION_NUM" == 25.* ]]; then
-          # APK mode (ImmortalWrt 25.12 and newer)
-          AMLOGIC_URL=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/ophub/luci-app-amlogic/releases/latest | grep "browser_download_url" | grep "luci-app-amlogic" | grep -v "i18n" | grep "\.apk" | head -n 1 | cut -d '"' -f 4)
-        else
-          # IPK mode (ImmortalWrt 24.10)
-          AMLOGIC_URL=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/ophub/luci-app-amlogic/releases/latest | grep "browser_download_url" | grep "luci-app-amlogic_" | grep -v "i18n" | grep "\.ipk" | head -n 1 | cut -d '"' -f 4)
-        fi
+        AMLOGIC_URL=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/ophub/luci-app-amlogic/releases/latest | grep "browser_download_url" | grep "luci-app-amlogic" | grep -v "i18n" | grep "\.apk" | head -n 1 | cut -d '"' -f 4)
 
         if [ -z "$AMLOGIC_URL" ]; then echo "Error: AMLOGIC_URL is empty!"; exit 1; fi
         AMLOGIC_FILE="${AMLOGIC_URL##*/}"
@@ -185,7 +181,7 @@ jobs:
           while IFS= read -r -d '' PACKAGE_FILE; do
             cp "$PACKAGE_FILE" "$GITHUB_WORKSPACE/imagebuilder/packages/"
             PACKAGE_COUNT=$((PACKAGE_COUNT + 1))
-          done < <(find "$SDK_DIR/bin/packages" -type f \( -name "$PACKAGE*.ipk" -o -name "$PACKAGE*.apk" \) -print0)
+          done < <(find "$SDK_DIR/bin/packages" -type f -name "$PACKAGE*.apk" -print0)
           if [ "$PACKAGE_COUNT" -eq 0 ]; then
             echo "Error: package $PACKAGE was not built by the SDK"
             exit 1
@@ -205,6 +201,13 @@ jobs:
         echo "Moving output to expected workspace..."
         mkdir -p $GITHUB_WORKSPACE/openwrt/bin/targets/armsr/armv8
         cp bin/targets/armsr/armv8/*rootfs.tar.gz $GITHUB_WORKSPACE/openwrt/bin/targets/armsr/armv8/
+        SING_BOX_PACKAGE=$(find "$RUNNER_TEMP/sing-box" -maxdepth 1 -type f -name "sing-box_*_openwrt_aarch64_generic.apk" -print -quit)
+        if [[ -z "$SING_BOX_PACKAGE" ]]; then echo "Error: official sing-box package was not downloaded"; exit 1; fi
+        SING_BOX_MANAGER="$PWD/staging_dir/host/bin/apk"
+        for ROOTFS_ARCHIVE in "$GITHUB_WORKSPACE"/openwrt/bin/targets/armsr/armv8/*rootfs.tar.gz; do
+          # HomeProxy's dependency installs sing-box first; replace it with the official release package afterwards.
+          bash "$GITHUB_WORKSPACE/armsr/armv8/diy/install_sing_box_release.sh" "$ROOTFS_ARCHIVE" "$SING_BOX_PACKAGE" "$SING_BOX_MANAGER"
+        done
         echo "FILE_DATE=$(date +"%Y%m%d")" >> $GITHUB_ENV
 
     - name: Clone source code
@@ -248,6 +251,7 @@ jobs:
         make defconfig
         make download -j$(( $(nproc) * 2 ))
         find dl -size -1k -exec rm -f {} \;
+        bash "$GITHUB_WORKSPACE/armsr/armv8/diy/download_sing_box.sh" "$RUNNER_TEMP/sing-box"
 
     - name: Compile N1 firmware
       if: github.event.inputs.build_mode == 'Compile'
@@ -257,6 +261,12 @@ jobs:
         cd openwrt
         echo -e "$(nproc) thread compile"
         make -j$(( $(nproc) + 1 )) || make -j1 V=s
+        SING_BOX_PACKAGE=$(find "$RUNNER_TEMP/sing-box" -maxdepth 1 -type f -name "sing-box_*_openwrt_aarch64_generic.apk" -print -quit)
+        if [[ -z "$SING_BOX_PACKAGE" ]]; then echo "Error: official sing-box package was not downloaded"; exit 1; fi
+        SING_BOX_MANAGER="$PWD/staging_dir/host/bin/apk"
+        for ROOTFS_ARCHIVE in "$PWD"/bin/targets/armsr/armv8/*rootfs.tar.gz; do
+          bash "$GITHUB_WORKSPACE/armsr/armv8/diy/install_sing_box_release.sh" "$ROOTFS_ARCHIVE" "$SING_BOX_PACKAGE" "$SING_BOX_MANAGER"
+        done
 
     - name: Package N1 firmware
       uses: ophub/amlogic-s9xxx-openwrt@main
