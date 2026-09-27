@@ -114,7 +114,16 @@ jobs:
         SING_BOX_PACKAGE=$(bash "$GITHUB_WORKSPACE/armsr/armv8/diy/download_release_asset.sh" \
           SagerNet/sing-box 'sing-box_' '_openwrt_aarch64_generic.apk' "$RELEASE_DIR/sing-box")
 
-        cp "$AMLOGIC_APP" "$AMLOGIC_I18N" "$HOMEPROXY_PACKAGE" packages/
+        HOMEPROXY_ASSET_NAME=$(basename "$HOMEPROXY_PACKAGE")
+        if [[ "$HOMEPROXY_ASSET_NAME" =~ ^luci-app-homeproxy_(.+)_all\.apk$ ]]; then
+          HOMEPROXY_VERSION="${BASH_REMATCH[1]}"
+        else
+          echo "Error: unexpected HomeProxy release asset name: $HOMEPROXY_ASSET_NAME"
+          exit 1
+        fi
+
+        cp "$AMLOGIC_APP" "$AMLOGIC_I18N" packages/
+        cp "$HOMEPROXY_PACKAGE" "packages/luci-app-homeproxy-${HOMEPROXY_VERSION}.apk"
 
         MOSDNS_EXTRACT_DIR="$RUNNER_TEMP/mosdns-packages"
         mkdir -p "$MOSDNS_EXTRACT_DIR"
