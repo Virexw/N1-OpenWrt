@@ -3,14 +3,6 @@ name: Build ImmortalWrt for armsr_armv8
 on:
   workflow_dispatch:
     inputs:
-      build_mode:
-        description: 'Build Mode'
-        required: true
-        default: 'ImageBuilder'
-        type: choice
-        options:
-          - ImageBuilder
-          - Compile
       branch:
         description: 'ImmortalWrt Branch or Tag'
         required: true
@@ -29,19 +21,8 @@ on:
           - 6.12.y
           - 6.6.y
           - 6.1.y
-      ssh:
-        description: 'SSH connection to Actions'
-        required: true
-        default: 'false'
-        type: choice
-        options:
-          - true
-          - false
-
 env:
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  REPO_URL: https://github.com/immortalwrt/immortalwrt
-  REPO_BRANCH: ${{ github.event.inputs.branch || 'v25.12.2' }}
   TZ: Asia/Shanghai
 
 jobs:
@@ -74,8 +55,6 @@ jobs:
         sudo -E apt-get -qq autoremove --purge > /dev/null
         sudo -E apt-get -qq clean > /dev/null
         sudo timedatectl set-timezone "$TZ"
-        sudo mkdir -p /workdir
-        sudo chown $USER:$GROUPS /workdir
 
     - name: Prepare first-boot root password
       env:
@@ -108,7 +87,6 @@ jobs:
         chmod 700 armsr/armv8/N1/files/etc/uci-defaults/zzzz-n1-root-password
 
     - name: Use Image Builder to build rootfs
-      if: github.event.inputs.build_mode != 'Compile'
       run: |
         VERSION_NUM=$(echo "${{ github.event.inputs.branch || 'v25.12.2' }}" | sed 's/^v//')
         IB_FILE="immortalwrt-imagebuilder-${VERSION_NUM}-armsr-armv8.Linux-x86_64.tar.zst"
@@ -123,150 +101,49 @@ jobs:
         cd imagebuilder
         mkdir -p packages files
 
-        # Fetch the official package separately; install it after HomeProxy and its feed dependency are in the image.
-        bash "$GITHUB_WORKSPACE/armsr/armv8/diy/download_sing_box.sh" "$RUNNER_TEMP/sing-box"
-        
-        echo "Downloading custom packages..."
-        AMLOGIC_URL=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/ophub/luci-app-amlogic/releases/latest | grep "browser_download_url" | grep "luci-app-amlogic" | grep -v "i18n" | grep "\.apk" | head -n 1 | cut -d '"' -f 4)
+        echo "Downloading prebuilt packages from the latest releases..."
+        RELEASE_DIR="$RUNNER_TEMP/release-packages"
+        AMLOGIC_APP=$(bash "$GITHUB_WORKSPACE/armsr/armv8/diy/download_release_asset.sh" \
+          ophub/luci-app-amlogic 'luci-app-amlogic-' '.apk' "$RELEASE_DIR/amlogic")
+        AMLOGIC_I18N=$(bash "$GITHUB_WORKSPACE/armsr/armv8/diy/download_release_asset.sh" \
+          ophub/luci-app-amlogic 'luci-i18n-amlogic-zh-cn-' '.apk' "$RELEASE_DIR/amlogic")
+        HOMEPROXY_PACKAGE=$(bash "$GITHUB_WORKSPACE/armsr/armv8/diy/download_release_asset.sh" \
+          getSomeCats/homeproxy 'luci-app-homeproxy_' '_all.apk' "$RELEASE_DIR/homeproxy")
+        MOSDNS_ARCHIVE=$(bash "$GITHUB_WORKSPACE/armsr/armv8/diy/download_release_asset.sh" \
+          sbwml/luci-app-mosdns 'aarch64_generic-' 'openwrt-25.12.tar.gz' "$RELEASE_DIR/mosdns")
+        SING_BOX_PACKAGE=$(bash "$GITHUB_WORKSPACE/armsr/armv8/diy/download_release_asset.sh" \
+          SagerNet/sing-box 'sing-box_' '_openwrt_aarch64_generic.apk' "$RELEASE_DIR/sing-box")
 
-        if [ -z "$AMLOGIC_URL" ]; then echo "Error: AMLOGIC_URL is empty!"; exit 1; fi
-        AMLOGIC_FILE="${AMLOGIC_URL##*/}"
-        AMLOGIC_FILE="${AMLOGIC_FILE%%\?*}"
-        curl -fL -o "packages/$AMLOGIC_FILE" "$AMLOGIC_URL"
-        
-        echo "Building current HomeProxy and MosDNS packages with the matching SDK..."
-        SDK_INDEX_URL="https://downloads.immortalwrt.org/releases/$VERSION_NUM/targets/armsr/armv8/"
-        SDK_FILE=$(curl -fsSL "$SDK_INDEX_URL" | grep -oE 'immortalwrt-sdk-[^"]+Linux-x86_64\.tar\.zst' | grep "^immortalwrt-sdk-${VERSION_NUM}-armsr-armv8_" | head -n 1)
-        if [ -z "$SDK_FILE" ]; then echo "Error: matching ImmortalWrt SDK not found"; exit 1; fi
+        cp "$AMLOGIC_APP" "$AMLOGIC_I18N" "$HOMEPROXY_PACKAGE" packages/
 
-        curl -fL "$SDK_INDEX_URL$SDK_FILE" -o "$GITHUB_WORKSPACE/$SDK_FILE"
-        tar -xf "$GITHUB_WORKSPACE/$SDK_FILE" -C "$GITHUB_WORKSPACE"
-        rm -f "$GITHUB_WORKSPACE/$SDK_FILE"
-        SDK_DIR=$(find "$GITHUB_WORKSPACE" -maxdepth 1 -type d -name "immortalwrt-sdk-${VERSION_NUM}-armsr-armv8_*" -print -quit)
-        if [ -z "$SDK_DIR" ]; then echo "Error: SDK extraction failed"; exit 1; fi
-
-        cd "$SDK_DIR"
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
-        bash "$GITHUB_WORKSPACE/armsr/armv8/diy/add_n1_packages.sh"
-        mkdir -p clone
-        git clone --depth=1 https://github.com/ophub/luci-app-amlogic.git clone/amlogic
-        rm -rf package/luci-app-amlogic
-        cp -rf clone/amlogic/luci-app-amlogic package/luci-app-amlogic
-        rm -rf clone
-
-        cat >> .config <<'EOF'
-        CONFIG_PACKAGE_luci-app-amlogic=y
-        CONFIG_PACKAGE_luci-i18n-amlogic-zh-cn=y
-        CONFIG_PACKAGE_luci-app-homeproxy=y
-        CONFIG_PACKAGE_luci-i18n-homeproxy-zh-cn=y
-        CONFIG_PACKAGE_luci-app-mosdns=y
-        CONFIG_PACKAGE_luci-i18n-mosdns-zh-cn=y
-        CONFIG_PACKAGE_mosdns=y
-        CONFIG_PACKAGE_geo2txt=y
-        CONFIG_PACKAGE_v2ray-geoip=y
-        CONFIG_PACKAGE_v2ray-geosite=y
-        EOF
-        make defconfig
-        make -j"$(nproc)" \
-          package/homeproxy/compile \
-          package/luci-app-amlogic/compile \
-          package/mosdns/mosdns/compile \
-          package/mosdns/geo2txt/compile \
-          package/mosdns/luci-app-mosdns/compile \
-          package/v2ray-geodata/compile
-
-        for PACKAGE in luci-i18n-amlogic-zh-cn luci-app-homeproxy luci-i18n-homeproxy-zh-cn luci-app-mosdns luci-i18n-mosdns-zh-cn mosdns v2ray-geoip v2ray-geosite geo2txt; do
-          PACKAGE_COUNT=0
-          while IFS= read -r -d '' PACKAGE_FILE; do
-            cp "$PACKAGE_FILE" "$GITHUB_WORKSPACE/imagebuilder/packages/"
-            PACKAGE_COUNT=$((PACKAGE_COUNT + 1))
-          done < <(find "$SDK_DIR/bin/packages" -type f -name "$PACKAGE*.apk" -print0)
-          if [ "$PACKAGE_COUNT" -eq 0 ]; then
-            echo "Error: package $PACKAGE was not built by the SDK"
-            exit 1
-          fi
+        MOSDNS_EXTRACT_DIR="$RUNNER_TEMP/mosdns-packages"
+        mkdir -p "$MOSDNS_EXTRACT_DIR"
+        tar -xzf "$MOSDNS_ARCHIVE" -C "$MOSDNS_EXTRACT_DIR"
+        MOSDNS_PACKAGE_DIR="$MOSDNS_EXTRACT_DIR/packages_ci"
+        if [[ ! -d "$MOSDNS_PACKAGE_DIR" ]]; then echo "Error: MosDNS release archive has no packages_ci directory"; exit 1; fi
+        for PACKAGE in geo2txt v2ray-geoip v2ray-geosite mosdns luci-app-mosdns luci-i18n-mosdns-zh-cn; do
+          PACKAGE_FILE=$(find "$MOSDNS_PACKAGE_DIR" -maxdepth 1 -type f -name "$PACKAGE-*.apk" -print -quit)
+          if [[ -z "$PACKAGE_FILE" ]]; then echo "Error: MosDNS release is missing package $PACKAGE"; exit 1; fi
+          cp "$PACKAGE_FILE" packages/
         done
-
-        cd "$GITHUB_WORKSPACE/imagebuilder"
 
         echo "Copying custom configuration files..."
         cp -r $GITHUB_WORKSPACE/armsr/armv8/N1/files/* files/
         sed -i "s|https://github.com/nantayo/N1-OpenWrt|https://github.com/${{ github.repository }}|g" files/etc/config/amlogic
         
         echo "Building image..."
-        PACKAGES="luci-app-amlogic luci-i18n-amlogic-zh-cn luci-app-homeproxy luci-i18n-homeproxy-zh-cn luci-app-mosdns luci-i18n-mosdns-zh-cn luci-i18n-package-manager-zh-cn luci-i18n-base-zh-cn luci-i18n-firewall-zh-cn autocore fstrim zoneinfo-asia bsdtar btrfs-progs chattr f2fs-tools gawk getopt lsattr perlbase-file perlbase-getopt perlbase-unicode perl-http-date pigz tar xfs-fsck xfs-mkfs -ppp -ppp-mod-pppoe -kmod-ppp -luci-app-attendedsysupgrade kmod-tun kmod-inet-diag kmod-netlink-diag kmod-nft-tproxy kmod-nft-queue"
+        PACKAGES="luci-app-amlogic luci-i18n-amlogic-zh-cn luci-app-homeproxy luci-app-mosdns luci-i18n-mosdns-zh-cn luci-i18n-package-manager-zh-cn luci-i18n-base-zh-cn luci-i18n-firewall-zh-cn autocore fstrim zoneinfo-asia bsdtar btrfs-progs chattr f2fs-tools gawk getopt lsattr perlbase-file perlbase-getopt perlbase-unicode perl-http-date pigz tar xfs-fsck xfs-mkfs -ppp -ppp-mod-pppoe -kmod-ppp -luci-app-attendedsysupgrade kmod-tun kmod-inet-diag kmod-netlink-diag kmod-nft-tproxy kmod-nft-queue"
         make image PROFILE="generic" PACKAGES="$PACKAGES" FILES="files"
         
         echo "Moving output to expected workspace..."
         mkdir -p $GITHUB_WORKSPACE/openwrt/bin/targets/armsr/armv8
         cp bin/targets/armsr/armv8/*rootfs.tar.gz $GITHUB_WORKSPACE/openwrt/bin/targets/armsr/armv8/
-        SING_BOX_PACKAGE=$(find "$RUNNER_TEMP/sing-box" -maxdepth 1 -type f -name "sing-box_*_openwrt_aarch64_generic.apk" -print -quit)
-        if [[ -z "$SING_BOX_PACKAGE" ]]; then echo "Error: official sing-box package was not downloaded"; exit 1; fi
         SING_BOX_MANAGER="$PWD/staging_dir/host/bin/apk"
         for ROOTFS_ARCHIVE in "$GITHUB_WORKSPACE"/openwrt/bin/targets/armsr/armv8/*rootfs.tar.gz; do
           # HomeProxy's dependency installs sing-box first; replace it with the official release package afterwards.
           bash "$GITHUB_WORKSPACE/armsr/armv8/diy/install_sing_box_release.sh" "$ROOTFS_ARCHIVE" "$SING_BOX_PACKAGE" "$SING_BOX_MANAGER"
         done
         echo "FILE_DATE=$(date +"%Y%m%d")" >> $GITHUB_ENV
-
-    - name: Clone source code
-      if: github.event.inputs.build_mode == 'Compile'
-      working-directory: /workdir
-      run: |
-        git clone $REPO_URL -b $REPO_BRANCH --single-branch --depth=1 openwrt
-        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
-        echo "FILE_DATE=$(date +"%Y%m%d")" >> $GITHUB_ENV
-    - name: Update & Install feeds
-      if: github.event.inputs.build_mode == 'Compile'
-      run: |
-        chmod +x armsr/armv8/diy/diy.sh
-        cd openwrt
-        ./scripts/feeds update -a
-        $GITHUB_WORKSPACE/armsr/armv8/diy/diy.sh
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
-
-    - name: Add current HomeProxy and MosDNS sources
-      if: github.event.inputs.build_mode == 'Compile'
-      run: |
-        cd openwrt
-        bash "$GITHUB_WORKSPACE/armsr/armv8/diy/add_n1_packages.sh"
-
-    - name: Load N1 custom config
-      if: github.event.inputs.build_mode == 'Compile'
-      run: |
-        rm -rf openwrt/files openwrt/.config
-        mv armsr/armv8/N1/files armsr/armv8/N1/.config openwrt/
-        sed -i "s|https://github.com/nantayo/N1-OpenWrt|https://github.com/${{ github.repository }}|g" openwrt/files/etc/config/amlogic
-
-    - name: SSH connect to Actions
-      uses: P3TERX/ssh2actions@main
-      if: github.event.inputs.ssh == 'true' && github.event.inputs.build_mode == 'Compile'
-
-    - name: Download package
-      if: github.event.inputs.build_mode == 'Compile'
-      working-directory: ./openwrt
-      run: |
-        make defconfig
-        make download -j$(( $(nproc) * 2 ))
-        find dl -size -1k -exec rm -f {} \;
-        bash "$GITHUB_WORKSPACE/armsr/armv8/diy/download_sing_box.sh" "$RUNNER_TEMP/sing-box"
-
-    - name: Compile N1 firmware
-      if: github.event.inputs.build_mode == 'Compile'
-      run: |
-        chmod -R 755 openwrt
-        chmod 600 openwrt/files/etc/n1-root-password.hash
-        cd openwrt
-        echo -e "$(nproc) thread compile"
-        make -j$(( $(nproc) + 1 )) || make -j1 V=s
-        SING_BOX_PACKAGE=$(find "$RUNNER_TEMP/sing-box" -maxdepth 1 -type f -name "sing-box_*_openwrt_aarch64_generic.apk" -print -quit)
-        if [[ -z "$SING_BOX_PACKAGE" ]]; then echo "Error: official sing-box package was not downloaded"; exit 1; fi
-        SING_BOX_MANAGER="$PWD/staging_dir/host/bin/apk"
-        for ROOTFS_ARCHIVE in "$PWD"/bin/targets/armsr/armv8/*rootfs.tar.gz; do
-          bash "$GITHUB_WORKSPACE/armsr/armv8/diy/install_sing_box_release.sh" "$ROOTFS_ARCHIVE" "$SING_BOX_PACKAGE" "$SING_BOX_MANAGER"
-        done
 
     - name: Package N1 firmware
       uses: ophub/amlogic-s9xxx-openwrt@main

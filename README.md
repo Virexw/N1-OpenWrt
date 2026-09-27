@@ -1,8 +1,8 @@
 # N1 ImmortalWrt 固件
 
-本项目用于斐讯 N1 旁路由，默认 LAN 地址为 `192.168.0.240`。固件通过 ImmortalWrt ImageBuilder 或源码编译构建，并由 ophub 的 [amlogic 打包脚本](https://github.com/ophub/amlogic-s9xxx-openwrt)制作成可刷写镜像。
+本项目用于斐讯 N1 旁路由，默认 LAN 地址为 `192.168.0.240`。固件通过 ImmortalWrt ImageBuilder 构建 rootfs，并由 ophub 的 [amlogic 打包脚本](https://github.com/ophub/amlogic-s9xxx-openwrt)制作成可刷写镜像。
 
-固件包含 LuCI、`luci-app-amlogic`、HomeProxy 和 MosDNS。HomeProxy 从 [getSomeCats/homeproxy](https://github.com/getSomeCats/homeproxy) 获取源码；MosDNS 使用 [sbwml/luci-app-mosdns](https://github.com/sbwml/luci-app-mosdns) 的 v5 包。构建时以匹配的 ImmortalWrt 版本和架构生成软件包。
+固件包含 LuCI、`luci-app-amlogic`、HomeProxy 和 MosDNS。HomeProxy、Amlogic 插件及其中文包从各自的 GitHub Release 获取；HomeProxy Release APK 已包含简体中文翻译。MosDNS 使用 [sbwml/luci-app-mosdns](https://github.com/sbwml/luci-app-mosdns) 最新 Release 中适用于 `aarch64_generic`、OpenWrt 25.12 的包集，包含 MosDNS 核心、LuCI、中文翻译和地理数据组件。sing-box 从官方 Release 获取。
 
 首次启动的 root 密码通过 GitHub Actions Secret `N1_ROOT_PASSWORD` 设置，不再使用仓库内的固定默认密码。
 
@@ -46,9 +46,9 @@ HomeProxy 配置可能含节点密码、订阅链接和服务器地址。公开�
 
 ## 构建选项
 
-在 GitHub Actions 手动运行 `Build ImmortalWrt for armsr_armv8`，选择 ImmortalWrt 版本、内核和构建方式。源码编译与 ImageBuilder 两种方式都会使用 `armsr/armv8/N1/files/` 作为 rootfs 覆盖目录。
+在 GitHub Actions 手动运行 `Build ImmortalWrt for armsr_armv8`，选择 ImmortalWrt 25.12.x 版本和 Amlogic 内核版本。工作流使用对应版本的 ImageBuilder，并将 `armsr/armv8/N1/files/` 作为 rootfs 覆盖目录。
 
-ImageBuilder 适合较快地制作镜像；Compile 会从源码构建完整固件。包管理器由 ImmortalWrt 版本决定：24.10 使用 opkg/IPK，25.12 使用 apk/APK。
+该工作流只使用 ImageBuilder，不再下载 SDK 或编译软件包；所需 APK 从上游 Release 下载并校验后打入固件。
 
 ## 致谢
 
