@@ -195,7 +195,7 @@ jobs:
         sed -i "s|https://github.com/nantayo/N1-OpenWrt|https://github.com/${{ github.repository }}|g" files/etc/config/amlogic
         
         echo "Building image..."
-        PACKAGES="luci-app-amlogic luci-i18n-amlogic-zh-cn luci-app-homeproxy luci-i18n-homeproxy-zh-cn luci-app-mosdns luci-i18n-mosdns-zh-cn luci-i18n-package-manager-zh-cn luci-i18n-base-zh-cn luci-i18n-firewall-zh-cn autocore fstrim zoneinfo-asia bsdtar btrfs-progs chattr f2fs-tools gawk getopt lsattr perlbase-file perlbase-getopt perlbase-unicode perl-http-date pigz tar xfs-fsck xfs-mkfs -ppp -ppp-mod-pppoe -kmod-ppp -luci-app-attendedsysupgrade kmod-tun kmod-inet-diag kmod-netlink-diag kmod-nft-tproxy"
+        PACKAGES="luci-app-amlogic luci-i18n-amlogic-zh-cn luci-app-homeproxy luci-i18n-homeproxy-zh-cn luci-app-mosdns luci-i18n-mosdns-zh-cn luci-i18n-package-manager-zh-cn luci-i18n-base-zh-cn luci-i18n-firewall-zh-cn autocore fstrim zoneinfo-asia bsdtar btrfs-progs chattr f2fs-tools gawk getopt lsattr perlbase-file perlbase-getopt perlbase-unicode perl-http-date pigz tar xfs-fsck xfs-mkfs -ppp -ppp-mod-pppoe -kmod-ppp -luci-app-attendedsysupgrade kmod-tun kmod-inet-diag kmod-netlink-diag kmod-nft-tproxy kmod-nft-queue"
         make image PROFILE="generic" PACKAGES="$PACKAGES" FILES="files"
         
         echo "Moving output to expected workspace..."
